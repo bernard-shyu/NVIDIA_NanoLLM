@@ -37,7 +37,7 @@ def print_help():
     print(f"  /speakers          List the speaker names")
     print(f"  /speaker Speaker   Change the speaker (current='{tts.speaker}')")
     print(f"  /languages         List the languages")
-    print(f"  /language en-US    Set the language code (current='{tts.language}')")
+    print(f"  /language en-US    Set the language code (current='{tts.languages}')")
     print(f"  /rate 1.0          Set the speaker rate (current={tts.rate:.2f})")
     print(f"  /buffer none       Disable input buffering (current='{','.join(tts.buffering)}')")
     print(f"  /interrupt or /i   Interrupt/mute the TTS output")

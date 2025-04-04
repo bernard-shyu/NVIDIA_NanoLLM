@@ -353,11 +353,25 @@ class NanoLLM():
     def patch_config(self, load=None, save=None, **kwargs):
         # Update the original HF model's config.json with different settings from the provided kwargs.
         # The original will be saved under the same directory to 'config.json.backup'
-        backup_path = self.config_path + '.backup'
+        backup_path = self.config_path + '.backup2'
         
         if not os.path.isfile(backup_path):
             logging.info(f"backing up original model config to {backup_path}")
-            shutil.copyfile(self.config_path, backup_path)
+            #----------------------------------------------------------------------------------------------
+            # BXU: 2025-0330: shutil.SameFileError: '/data/models/huggingface/models--dusty-nv--openvla-7b-mimicgen/snapshots/865b827044ba379bac2023688dd84520e268e29d/config.json.backup' and '/data/models/huggingface/models--dusty-nv--openvla-7b-mimicgen/snapshots/865b827044ba379bac2023688dd84520e268e29d/config.json' are the same file
+            #  >>> /data/.../865b827044ba379bac2023688dd84520e268e29d/config.json.backup -> ../../blobs/bdd3c3e855b5e679de41ec76fab0ea0491816773
+            #      /data/.../865b827044ba379bac2023688dd84520e268e29d/config.json        -> ../../blobs/bdd3c3e855b5e679de41ec76fab0ea0491816773
+            #----------------------------------------------------------------------------------------------
+            ### original failure code
+            # shutil.copyfile(self.config_path, backup_path)    
+            #----------------------------------------------------------------------------------------------
+            ### fixed code
+            if os.path.islink(self.config_path):
+                real_config_path = os.path.join(os.path.dirname(self.config_path), os.readlink(self.config_path))
+                shutil.copyfile(real_config_path, backup_path)
+            else:
+                shutil.copyfile(self.config_path, backup_path)
+            # ---------------------------------------------------------------------------------------------
             
         logging.info(f"patching model config with {kwargs}")
         
@@ -383,7 +397,7 @@ class NanoLLM():
     
     def restore_config(self, **kwargs):
         # restore the config file back to the original so that HF can load it again
-        backup_path = self.config_path + '.backup'
+        backup_path = self.config_path + '.backup2'
         
         if os.path.isfile(backup_path): 
             logging.debug(f"restoring original model config from {backup_path}")
