@@ -283,11 +283,25 @@ class Plugin(threading.Thread):
     def start(self):
         """
         Start threads for all plugins in the graph that have threading enabled.
+        Add visited set to prevent infinite recursion.
         """
+        # Add a class-level visited set if it doesn't exist
+        if not hasattr(Plugin, '_started_plugins'):
+            Plugin._started_plugins = set()
+        
+        # Check if this plugin has already been started
+        if self in Plugin._started_plugins:
+            return self
+            
+        # Mark this plugin as started
+        Plugin._started_plugins.add(self)
+        
+        # Start this plugin's thread if threaded
         if self.threaded:
             if not self.is_alive():
                 super().start()
             
+        # Start output plugins
         for output_channel in self.outputs:
             for output in output_channel:
                 output.start()
@@ -297,8 +311,11 @@ class Plugin(threading.Thread):
     def stop(self):
         """
         Flag the plugin to stop processing and exit the run() thread.
+        Clear the started plugins set.
         """
         self.stop_flag = True
+        if hasattr(Plugin, '_started_plugins'):
+            Plugin._started_plugins.clear()
         logging.debug(f"stopping plugin {self.name} (thread {self.native_id})")
      
     def destroy(self):
