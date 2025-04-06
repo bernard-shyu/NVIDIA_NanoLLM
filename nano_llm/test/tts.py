@@ -37,7 +37,7 @@ def print_help():
     print(f"  /speakers          List the speaker names")
     print(f"  /speaker Speaker   Change the speaker (current='{tts.speaker}')")
     print(f"  /languages         List the languages")
-    print(f"  /language en-US    Set the language code (current='{tts.languages}')")
+    print(f"  /language en-US    Set the language code (current='{tts.language}')")
     print(f"  /rate 1.0          Set the speaker rate (current={tts.rate:.2f})")
     print(f"  /buffer none       Disable input buffering (current='{','.join(tts.buffering)}')")
     print(f"  /interrupt or /i   Interrupt/mute the TTS output")
@@ -50,10 +50,27 @@ def commands(text):
     try:
         cmd = text.lower().strip()
         if cmd.startswith('/default'):
-            tts("Hello there, how are you today? ")
-            tts("The weather is 76 degrees out and sunny. ")
-            tts("Your first meeting is in an hour downtown, with normal traffic. ")
-            tts("Can I interest you in anything quick for breakfast?")
+            if tts.language.startswith('en'):
+                tts("Hello there, how are you today? ")
+                tts("The weather is 76 degrees out and sunny. ")
+                tts("Your first meeting is in an hour downtown, with normal traffic. ")
+                tts("Can I interest you in anything quick for breakfast?")
+            if tts.language.startswith('zh'):
+                tts("菩薩清涼月. 常遊畢竟空. 眾生心垢淨. 菩提月現前. ")
+                tts("菩薩清涼月. 遊於畢竟空. 垂光照三界. 心法無不現. ")
+                tts("佛法無人說. 雖慧莫能瞭. 譬如暗中寶. 無燈不可見. ")    # 佛法無人說，雖慧莫能了
+                tts("若人欲識佛境界. 當淨其意如虛空. 遠離妄想及諸取. 令心所向皆無礙. ")
+                tts("猶如蓮華不著水. 亦如日月不著空. 諸惡趣苦願寂靜.  一切群生令安樂. 於諸群生行利益. 乃至十方諸剎土. ")
+                tts("旋風偃嶽而常靜. 江河競注而不流. 野馬漂鼓而不動. 日月歷天而不周. ")
+                tts("千丈之堤. 以螻蟻之穴潰.  百尺之室. 以突隙之熛焚. ")
+                tts("阿陀那識甚深細. 一切種子如瀑流. 我於凡愚不開演. 恐彼分別執為我. ")
+                tts("如海遇風緣. 起種種波浪. 現前作用轉. 無有間斷時.  藏識海亦然. 境等風所擊. 恆起諸識浪. 現前作用轉. ")
+                tts("彊觀諸法唯是心相. 虛狀無實. 復當觀此能觀之心. 亦無實念. ")
+                tts("心本無生因境有. 前境若無心亦無. ")
+                tts("不以囊臭而棄其金. 慢如高山雨水不停. 卑如江海萬川歸集. 我以法故復度敬彼. ")
+                tts("狐非獅子類. 燈非日月明. 池無巨海納. 丘無嵩嶽榮.  法雲垂世界. 法雨潤群萌. 顯通稀有事. 處處化群生. ")
+                tts("去抓藍色巧克力口味, 白色草莓口味, 綠色牛奶口味. ")
+                tts("去拿紅色蘋果口味. ", final=True)
         elif cmd.startswith('/voices'):
             print(tts.voices)
         elif cmd.startswith('/voice'):
@@ -79,7 +96,7 @@ def commands(text):
         elif len(cmd.strip()) == 0:
             pass
         else:
-            return text  # send to TTS
+            return tts(f"{text} . " )  # send to TTS
     except Exception as error:
         print(f"\nError: {error}")
     print_prompt()

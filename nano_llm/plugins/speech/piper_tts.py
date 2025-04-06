@@ -3,6 +3,7 @@ import os
 import time
 import natsort
 import logging
+import re
 
 import numpy as np
 import torch
@@ -27,6 +28,7 @@ class PiperTTS(AutoTTS):
     ModelCache = {}
     
     def __init__(self, voice: str='en_US-libritts-high', voice_speaker: str='p339',
+                 language_code: str = 'en-US', 
                  voice_rate: float=1.0, sample_rate_hz: int=22050, 
                  model_cache: str=os.environ.get('PIPER_CACHE'),
                  use_cache: bool=True, **kwargs):
@@ -60,7 +62,7 @@ class PiperTTS(AutoTTS):
             if model_info['language']['code'] not in self.languages:
                 self.languages.append(model_info['language']['code'])
         
-        #self.language = language_code
+        self.language = re.sub(r'-', '_', language_code)    # en-US => en_US,    zh-CN => zh_CN
 
         self.add_parameter('voice', default=voice)
         self.add_parameter('speaker', default=voice_speaker, options=self.speakers, kwarg='voice_speaker')

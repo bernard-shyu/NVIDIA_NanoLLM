@@ -16,15 +16,26 @@
 import time
 
 from nano_llm.plugins import AutoASR, AutoTTS, AudioOutputDevice, AudioRecorder, PrintStream
+from nano_llm.plugins import AudioInputDevice,  VADFilter
 from nano_llm.utils import ArgParser
 
 args = ArgParser(extras=['asr', 'tts', 'audio_input', 'audio_output', 'log']).parse_args()
 
+#-------------------------------------------------------------------------------------
+# pipeline for ASR input audio
+#-------------------------------------------------------------------------------------
+audio_input = AudioInputDevice(**vars(args))
+vad = VADFilter(**vars(args))
 asr = AutoASR.from_pretrained(**vars(args))
-tts = AutoTTS.from_pretrained(**vars(args))
 
+audio_input.add(vad.add(asr))
 asr.add(PrintStream(partial=False, prefix='## ', color='green'), AutoASR.OutputFinal)
 asr.add(PrintStream(partial=False, prefix='>> ', color='blue'), AutoASR.OutputPartial)
+
+#-------------------------------------------------------------------------------------
+# pipeline for TTS output audio
+#-------------------------------------------------------------------------------------
+tts = AutoTTS.from_pretrained(**vars(args))
 
 asr.add(tts, AutoASR.OutputFinal)
 
@@ -34,8 +45,10 @@ if args.audio_output_device is not None:
 if args.audio_output_file is not None:
     tts.add(AudioRecorder(**vars(args)))
     
-asr.start()
-
+#-------------------------------------------------------------------------------------
+#asr.start()
+audio_input.start().join()
+    
 def print_help():
     print(f"\nSpeak into the mic, or enter these commands:\n")
     print(f"  /voices            List the voice names")
@@ -52,6 +65,7 @@ def print_help():
 time.sleep(2.5)
 print_help()
 
+#-------------------------------------------------------------------------------------
 while True:
     try:
         text = input()
