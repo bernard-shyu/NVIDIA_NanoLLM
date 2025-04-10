@@ -42,17 +42,17 @@ class AutoTTS(Plugin):
         The `tts` param should either be 'riva' or 'xtts' (or name/path of XTTS model)
         The kwargs are forwarded to the TTS plugin implementing the model.
         """
-        from nano_llm.plugins.speech.riva_tts import RivaTTS
-        from nano_llm.plugins.speech.piper_tts import PiperTTS
-        from nano_llm.plugins.speech.fastpitch_tts import FastPitchTTS
-        
         try:
-            from nano_llm.plugins import XTTS
+            tts_loaded=""
+            from nano_llm.plugins.speech.piper_tts import PiperTTS;             tts_loaded="PiperTTS"
+            from nano_llm.plugins.speech.fastpitch_tts import FastPitchTTS;     tts_loaded+=" FastPitchTTS"
+            from nano_llm.plugins.speech.riva_tts import RivaTTS;               tts_loaded+=" RivaTTS"
+            from nano_llm.plugins import XTTS;                                  tts_loaded+=" XTTS"
             has_xtts = True
         except ImportError as error:
             has_xtts = False
-            #logging.warning(f"failed to import XTTS plugin, disabling... ({error})")
-            
+            logging.warning(f"failed to import TTS plugin:  LOADED: ({tts_loaded}) \tERROR: ({error})\n")
+        
         if not tts or tts.lower() == 'none' or tts.lower().startswith('disable'):
             return None
             

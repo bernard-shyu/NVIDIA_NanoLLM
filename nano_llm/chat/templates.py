@@ -136,6 +136,27 @@ ChatTemplates = {
         'user': "<s>${MESSAGE}",
         'bot': "${MESSAGE}",
     },
+    
+    'deepseek': {
+        #'system_prompt': "You are an AI assistant that follows instructions extremely well. Help as much as you can.",
+        'system_prompt': "你是一个中文人工智能助手, 请用中文回答所有问题.",
+        'system': '${MESSAGE}\n\n',
+        'first': '<｜begin▁of▁sentence｜>Human: ${MESSAGE}\n\nAssistant:',
+        'user': '<｜begin▁of▁sentence｜>Human: ${MESSAGE}\n\nAssistant:',
+        'bot': '${MESSAGE}',
+        'stop': ['<｜end▁of▁sentence｜>', '<|endoftext|>', 'Human:', 'Assistant:'],
+        'sep': '\n\n'
+    },
+    
+    # For newer DeepSeek models using INST format
+    'deepseek-inst': {
+        #'system_prompt': "You are a helpful AI assistant.",
+        'system_prompt': "你是一个中文人工智能助手, 请用中文回答所有问题.",
+        'system': '<|system|>\n${MESSAGE}<|endoftext|>',
+        'user': '<|user|>\n${MESSAGE}<|endoftext|>\n<|assistant|>\n',
+        'bot': '${MESSAGE}<|endoftext|>',
+        'stop': ['<|endoftext|>', '<|user|>', '<|system|>', '<|assistant|>']
+    },
 }
 
 ChatTemplates['llava-v0'] = ChatTemplates['vicuna-v0']
