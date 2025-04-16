@@ -57,8 +57,10 @@ def commands(text):
                 tts("Your first meeting is in an hour downtown, with normal traffic. ")
                 tts("Can I interest you in anything quick for breakfast?")
             if tts.language.startswith('zh'):
+                tts("去抓藍色的盒子. 我想要綠色的蘋果口味.  我想吃黃色的鳳梨口味. ")
                 for line in zh_prompts_list:
                     tts(line)
+                tts("幫我拿紅色巧克力口味. 粉紅色草莓口味. 淺黃色牛奶口味." )
         elif cmd.startswith('/voices'):
             print(tts.voices)
         elif cmd.startswith('/voice'):

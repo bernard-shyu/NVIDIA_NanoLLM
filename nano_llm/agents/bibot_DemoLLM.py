@@ -2,7 +2,7 @@
 #=========================================================================================================================================
 import logging
 import threading
-import re, termcolor, opencc
+import re, termcolor, opencc, time
 from nano_llm.test.zh_prompts import zh_prompts_list
 
 from nano_llm import Agent, Pipeline, StopTokens, BotFunctions, bot_function, Plugin, NanoLLM, ChatHistory 
@@ -15,8 +15,9 @@ from nano_llm.plugins import (
 )
 
 """
-pipeline architecture :               >👻           @🤖
-    AudioInputDevice -> VADFilter ->  ASR -----> BiBotAgent --------------------->  TTS  (external bibot_command)
+                                                            /-------------------->  external BASH of bibot command
+pipeline architecture :               >👻           @🤖    /
+    AudioInputDevice -> VADFilter ->  ASR -----> BiBotAgent --------------------->  TTS -->  RateLimit  --> AudioOutputDevice
                                               /            \                    /
                                  >🤡         /              \        #👹       /
                               UserPrompt ---+                +---->  LLM -----+
@@ -46,19 +47,21 @@ class BiBotChatLLM(Agent):
         #: The ASR plugin that listen to the microphone AudioInput
         #-------------------------------------------------------------------------------------
         if not asr or isinstance(asr, str):
+            # Create Plugin objects for ASR and VAD
+            #-------------------------------------------------------------
             self.asr = AutoASR.from_pretrained(asr=asr, **kwargs) 
-        else:
-            self.asr = asr
-            
-        self.vad = VADFilter(**kwargs).add(self.asr) if self.asr else None
-        self.audio_input = AudioInputDevice(**kwargs).add(self.vad) if self.vad else None
+            self.vad = VADFilter(**kwargs)
+            self.audio_input = AudioInputDevice(**kwargs)
+
+            # Build up Plugin connections
+            #-------------------------------------------------------------
+            Pipeline([self.audio_input, self.vad, self.asr])
         
-        if self.asr:
             self.asr.add(PrintStream(partial=False, prefix='👻👻 ', color='blue'), AutoASR.OutputFinal)
-            self.asr.add(PrintStream(partial=False, prefix='👻👻 ', color='magenta'), AutoASR.OutputPartial)
+            self.asr.add(PrintStream(partial=False, prefix='👻>> ', color='magenta'), AutoASR.OutputPartial)
             
-            self.asr.add(self.asr_partial, AutoASR.OutputPartial) # pause output when user is speaking
-            self.asr.add(self.asr_final, AutoASR.OutputFinal)     # clear queues on final ASR transcript
+            self.asr.add(self.asr_partial, AutoASR.OutputPartial)   # pause output when user is speaking
+            self.asr.add(self.asr_final,   AutoASR.OutputFinal)     # clear queues on final ASR transcript
 
             self.asr_history = None  # store the partial ASR transcript
 
@@ -66,64 +69,52 @@ class BiBotChatLLM(Agent):
         #: The TTS plugin that speaks the Audio output.
         #-------------------------------------------------------------------------------------
         if not tts or isinstance(tts, str):
+            # Create Plugin objects for TTS and RateLimit
+            #-------------------------------------------------------------
             self.tts = AutoTTS.from_pretrained(tts=tts, **kwargs) 
-        else:
-            self.tts = tts
-            
-        if self.tts:
-            self.tts_output = RateLimit(rate=1.0, drop_inputs=True, chunk=9600) # slow down TTS to realtime and be able to pause it
-            self.tts.add(self.tts_output)
+            self.tts_ratelimit = RateLimit(rate=1.0, drop_inputs=True, chunk=9600) # slow down TTS to realtime and be able to pause it
+            self.tts.add(self.tts_ratelimit)
 
-            self.audio_output_device = kwargs.get('audio_output_device')
-            self.audio_output_file = kwargs.get('audio_output_file')
-            
-            if self.audio_output_device is not None:
+            # Create Plugin objects for AudioOutput (device and/or file)
+            #-------------------------------------------------------------
+            if kwargs.get('audio_output_device') is not None:
                 self.audio_output_device = AudioOutputDevice(**kwargs)
-                self.tts_output.add(self.audio_output_device)    # self.tts_output | self.tts
+                self.tts_ratelimit.add(self.audio_output_device)    # self.tts_ratelimit | self.tts
             
-            if self.audio_output_file is not None:
+            if kwargs.get('audio_output_file') is not None:
                 self.audio_output_file = AudioRecorder(**kwargs)
-                self.tts_output.add(self.audio_output_file)
+                self.tts_ratelimit.add(self.audio_output_file)
 
         #-------------------------------------------------------------------------------------
         # LLM / BiBotAgent /UserPrompt pipeline
         #-------------------------------------------------------------------------------------
+        # Create Plugin objects for ASR and VAD
+        self.llm = ChatQuery(drop_inputs=True, **kwargs)        #: The LLM model plugin (like ChatQuery)
+        self.prompt = UserPrompt(interactive=True, **kwargs)    #: Text prompts input for CLI.
+        self.bibot = BiBotAgent(**kwargs)                       #: The BiBot Agent plugin (handle ROBOT voice commands)
 
-        #: The LLM model plugin (like ChatQuery)
-        self.llm = ChatQuery(drop_inputs=True, **kwargs) #ProcessProxy('ChatQuery', **kwargs)  
-
-        #: Text prompts input for CLI.
-        self.prompt = UserPrompt(interactive=True, **kwargs)
-
-        #: The BiBot Agent plugin (handle ROBOT voice commands)
-        self.bibot = BiBotAgent(**kwargs)
-
-        # Text prompts from ASR Audio or UserPrompt CLI.
+        # Build up Plugin connections
+        #-----------------------------------------------------------------
         if self.asr:
-            self.asr.add(self.bibot, AutoASR.OutputFinal)  # runs after asr_final() and any interruptions occur
-        self.prompt.add(self.bibot)
+            self.asr.add(self.bibot, AutoASR.OutputFinal)       # Text prompts from ASR Audio.
+        self.prompt.add( self.bibot)                            # Text prompts from UserPrompt CLI.
 
-        self.bibot.add(self.llm, BiBotAgent.OutputLLM)     # send the LLM query to the LLM
-
-        self.bibot.add(PrintStream(partial=False, prefix='🤖🤖 ', color='red'),    BiBotAgent.OutputLLM)
-        self.bibot.add(PrintStream(partial=False, prefix='🤖🤖 ', color='magenta'), BiBotAgent.OutputTTS)
+        self.bibot.add(self.llm, BiBotAgent.OutputLLM)          # send the LLM query to the LLM
+        self.bibot.add(PrintStream(partial=False, prefix='🤖🤖 ', color='red'),      BiBotAgent.OutputTTS)
+        self.bibot.add(PrintStream(partial=False, prefix='🤖>> ', color='magenta'),  BiBotAgent.OutputLLM)
 
         if self.tts:
-            self.bibot.add(self.tts, BiBotAgent.OutputTTS)  # send the audio output to the TTS
-            #self.llm.add(self.tts, ChatQuery.OutputWords)   # send the LLM query to the TTS
-            self.llm.add(self.tts, ChatQuery.OutputFinal)   # send the LLM query to the TTS
+            self.bibot.add(self.tts, BiBotAgent.OutputTTS)      # send the audio output to the TTS
+            self.llm.add(  self.tts, ChatQuery.OutputFinal)     # send the LLM query to the TTS
 
-        self.llm.add(PrintStream(partial=False, prefix='👹👹 ', color='green'),   ChatQuery.OutputFinal)
-        self.llm.add(PrintStream(partial=False, prefix='👹👹 ', color='magenta'), ChatQuery.OutputWords)
+        self.llm.add(  PrintStream(partial=False, prefix='👹👹 ', color='green'),    ChatQuery.OutputFinal)
+        self.llm.add(  PrintStream(partial=False, prefix='👹>> ', color='magenta'),  ChatQuery.OutputWords)
 
         #-------------------------------------------------------------------------------------
         # setup pipeline with two entry nodes
-        self.pipeline = [self.prompt]
-
-        if self.audio_input:                                 # if self.vad:
-            self.pipeline.append(self.audio_input)           #     self.pipeline.append(self.vad)
-
         #-------------------------------------------------------------------------------------
+        self.pipeline = [self.prompt, self.audio_input]
+
         BiBotAgent.unitest()
         self.print_input_prompt()
 
@@ -138,7 +129,7 @@ class BiBotChatLLM(Agent):
         if len(text.split(' ')) < 2:
             return
         if self.tts:
-            self.tts_output.pause(1.0)
+            self.tts_ratelimit.pause(1.0)
 
     def asr_final(self, text):
         """
@@ -155,7 +146,7 @@ class BiBotChatLLM(Agent):
         self.llm.interrupt(recursive=False)
         if self.tts:
             self.tts.interrupt(recursive=False)
-            self.tts_output.interrupt(block=False, recursive=False) # might be paused/asleep
+            self.tts_ratelimit.interrupt(block=False, recursive=False) # might be paused/asleep
  
     def on_eos(self, input):
         if input.endswith('</s>'):
