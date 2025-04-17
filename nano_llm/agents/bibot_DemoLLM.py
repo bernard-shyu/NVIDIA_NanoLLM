@@ -72,8 +72,12 @@ class BiBotChatLLM(Agent):
             # Create Plugin objects for TTS and RateLimit
             #-------------------------------------------------------------
             self.tts = AutoTTS.from_pretrained(tts=tts, **kwargs) 
-            self.tts_ratelimit = RateLimit(rate=1.0, drop_inputs=True, chunk=4410) # slow down TTS to realtime and be able to pause it
+            self.tts_ratelimit = RateLimit(rate=1.0, drop_inputs=True, chunk=int(kwargs.get('sample_rate_hz')/10)) # slow down TTS to realtime and be able to pause it
             self.tts.add(self.tts_ratelimit)
+
+            self.tts.add(self.on_tts_begin)
+            self.tts_ratelimit.add(self.on_tts_progress)
+            self.TTS_synthesizing = False
 
             # Create Plugin objects for AudioOutput (device and/or file)
             #-------------------------------------------------------------
@@ -148,10 +152,36 @@ class BiBotChatLLM(Agent):
             self.tts.interrupt(recursive=False)
             self.tts_ratelimit.interrupt(block=False, recursive=False) # might be paused/asleep
  
-    def on_eos(self, input):
-        if input.endswith('</s>'):
-            print_table(self.model.stats)
-            self.print_input_prompt()
+    def on_tts_begin(self, input):
+        logging.info(f"TTS_synthesizing: SPEAKER started")
+        self.TTS_synthesizing = True
+        self.last_monitor_time = time.perf_counter()
+        threading.Thread(target=self.tts_synth_monitor).start()
+
+    def on_tts_progress(self, input):
+        self.last_monitor_time = time.perf_counter()
+
+    def tts_synth_monitor(self):
+        #logging.debug(f"TTS_synthesizing:  Monitoring started")
+        while self.TTS_synthesizing:
+            if (time.perf_counter() - self.last_monitor_time) >= 2:    # Check if 2 seconds have passed in silence
+                self.vad.interrupt(recursive=False)                    # clear VAD/ASR for feedbacked voice from TTS output
+                self.asr.interrupt(recursive=False)
+                self.TTS_synthesizing = False
+                self.print_input_prompt()
+                logging.info(f"TTS_synthesizing: SPEAKER stopped")
+            time.sleep(0.5)          # Avoid busy-waiting; check every 0.5 seconds
+        #logging.debug(f"TTS_synthesizing:  Monitoring Stopped")
+        
+    def print_pipeline_status(self, input):
+        dbg_txt =  f"ASR={self.asr.input_queue.qsize()} " + \
+                   f"TTS={self.tts.input_queue.qsize()} " + \
+                   f"LLM={self.llm.input_queue.qsize()} " + \
+                   f"RLMT={self.tts_ratelimit.input_queue.qsize()} " + \
+                   f"USER={self.prompt.input_queue.qsize()} " + \
+                   f"BIBOT={self.bibot.input_queue.qsize()} "
+        dbg_txt += f"TTS-SYN={self.TTS_synthesizing} "
+        termcolor.cprint(f"👾👾 Pulgins input_queue size: {dbg_txt}\n", 'red', end='', flush=True)
 
     def print_input_prompt(self):
         termcolor.cprint('🤡🤡 PROMPT: ', 'blue', end='', flush=True)
@@ -178,6 +208,7 @@ class BiBotAgent(Plugin):
         "VERBS": ["去抓", "去拿", "我想", "我要", "幫我拿", "幫我抓" ],
         "OBJECTS": ["巧克力口味", "草莓口味", "牛奶口味" ],
         "COLORS": ["紅色",       "粉紅色",  "淺黃色" ],
+        "STOP": ["停止", "停停停", "停下來" ],
         "SECRETS": ["微妙不可思議", "維妙不可思議", "惟妙不可思議", "慈悲喜捨", "信解受持" ]
     }
     
@@ -212,6 +243,7 @@ class BiBotAgent(Plugin):
         matched_obj = matches["OBJECTS"]
         matched_color = matches["COLORS"]
         matched_secret = matches["SECRETS"]
+        matched_stop = matches["STOP"]
         
         # Find index of matched color in the color list
         # index_color = None
@@ -223,16 +255,12 @@ class BiBotAgent(Plugin):
         index_color   = BiBotAgent.PATTERN_LISTS["COLORS"].index(matched_color) if matched_color in BiBotAgent.PATTERN_LISTS["COLORS"] else None
         
         # Determine the result based on the matches
-        if matched_verb and matched_color:
-            return 1, BiBotAgent.PATTERN_LISTS["OBJECTS"][index_color]
-        elif matched_obj:
-            return 1, matched_obj
-        elif matched_verb:
-            return 0, "USER_CONFIRM"
-        elif matched_secret:
-            return 2, "SECRETS"
-        else:
-            return -1, text
+        if matched_verb and matched_color:      return 1, BiBotAgent.PATTERN_LISTS["OBJECTS"][index_color]
+        elif matched_obj:                       return 2, matched_obj
+        elif matched_verb:                      return 3, "NEED_USER_CONFIRM"
+        elif matched_secret:                    return 4, "SECRETS"
+        elif matched_stop:                      return 0, "STOP"
+        else:                                   return -1, text
         
     #-------------------------------------------------------------------------------------
     @staticmethod
@@ -278,17 +306,33 @@ class BiBotAgent(Plugin):
             logging.debug(f"BiBotAgent interrupted (input={len(input)})")
             return
         
-        result, text = BiBotAgent.match_bibot_patterns(input)
-        logging.debug(f"BiBotAgent match ROBOT pattern: (input='{input}', result={result}, text='{text}')")
-        logging.debug(f"BXU debug kwargs='{kwargs}' ")
+        #---------------------------------------------------------------------------------
+        if input == "/status":
+            agent.print_pipeline_status(input)    # print the status of the pipeline
+            return
+        elif input == "/cancel" or input == "/stop":
+            logging.info(f"BiBotAgent will cancel TTS synthesizing: {input}")
+            agent.on_interrupt()
+            return
 
-        if result == 1:
+        #---------------------------------------------------------------------------------
+        result, text = BiBotAgent.match_bibot_patterns(input)
+        logging.debug(f"BiBotAgent match ROBOT pattern: (input='{input}', result={result}, text='{text}'\n\tkwargs='{kwargs}'")
+
+        #---------------------------------------------------------------------------------
+        if result == 0:                 # stop the TTS synthesizing
+            logging.info(f"BiBotAgent will stop TTS synthesizing: {text}")
+            agent.on_interrupt()
+            return
+
+        #---------------------------------------------------------------------------------
+        if result == 1 or result == 2:
             self.output( f"榮幸之至, 且待片刻, 將為汝取: {text}", channel=BiBotAgent.OutputTTS, final=True)
             asyncio.run(BiBotAgent.send_ws_commands(text))
             logging.info(f"Will invoke external ROBOT to pick object: '{text}'")
-        elif result == 0:
+        elif result == 3:
             self.output( "汝欲求何事,  我將為汝效勞?", channel=BiBotAgent.OutputTTS, final=True)
-        elif result == 2:
+        elif result == 4:
             for line in zh_prompts_list:
                 self.output( line, channel=BiBotAgent.OutputTTS, partial=True)
                 logging.debug(f"secret workds: '{line}'")
@@ -302,7 +346,7 @@ class BiBotAgent(Plugin):
 
         async with websockets.connect(uri) as websocket:
             await websocket.send(command)
-            print(f"Sent: {command}")
+            logging.debug(f"Sent: '{command}'")
 
 
 #=========================================================================================================================================
