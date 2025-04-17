@@ -170,7 +170,7 @@ ChatTemplates['llava-llama-2'].update({
 for key in ChatTemplates:
     ChatTemplates[key] = AttributeDict(name=key, **ChatTemplates[key])
 
-StopTokens = ['</s>', '<|endoftext|>', '<|im_end|>', '<eos>', '<|end_of_text|>', '<|eot_id|>']
+StopTokens = ['</s>', '<|endoftext|>', '<|im_end|>', '<eos>', '<|end_of_text|>', '<|eot_id|>', '<｜end▁of▁sentence｜>']
 
 def remove_special_tokens(text):
     """

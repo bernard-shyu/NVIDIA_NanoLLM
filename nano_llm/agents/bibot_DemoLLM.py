@@ -2,7 +2,7 @@
 #=========================================================================================================================================
 import logging
 import threading
-import re, termcolor, opencc, time
+import re, termcolor, opencc, time, asyncio, websockets
 from nano_llm.test.zh_prompts import zh_prompts_list
 
 from nano_llm import Agent, Pipeline, StopTokens, BotFunctions, bot_function, Plugin, NanoLLM, ChatHistory 
@@ -57,7 +57,7 @@ class BiBotChatLLM(Agent):
             #-------------------------------------------------------------
             Pipeline([self.audio_input, self.vad, self.asr])
         
-            self.asr.add(PrintStream(partial=False, prefix='👻👻 ', color='blue'), AutoASR.OutputFinal)
+            self.asr.add(PrintStream(partial=False, prefix='👻👻 ', color='blue'),    AutoASR.OutputFinal)
             self.asr.add(PrintStream(partial=False, prefix='👻>> ', color='magenta'), AutoASR.OutputPartial)
             
             self.asr.add(self.asr_partial, AutoASR.OutputPartial)   # pause output when user is speaking
@@ -72,7 +72,7 @@ class BiBotChatLLM(Agent):
             # Create Plugin objects for TTS and RateLimit
             #-------------------------------------------------------------
             self.tts = AutoTTS.from_pretrained(tts=tts, **kwargs) 
-            self.tts_ratelimit = RateLimit(rate=1.0, drop_inputs=True, chunk=9600) # slow down TTS to realtime and be able to pause it
+            self.tts_ratelimit = RateLimit(rate=1.0, drop_inputs=True, chunk=4410) # slow down TTS to realtime and be able to pause it
             self.tts.add(self.tts_ratelimit)
 
             # Create Plugin objects for AudioOutput (device and/or file)
@@ -284,7 +284,8 @@ class BiBotAgent(Plugin):
 
         if result == 1:
             self.output( f"榮幸之至, 且待片刻, 將為汝取: {text}", channel=BiBotAgent.OutputTTS, final=True)
-            logging.info(f"Will invoke external ROBOT: /opt/bibot/robot_cmd.sh '{text}'")
+            asyncio.run(BiBotAgent.send_ws_commands(text))
+            logging.info(f"Will invoke external ROBOT to pick object: '{text}'")
         elif result == 0:
             self.output( "汝欲求何事,  我將為汝效勞?", channel=BiBotAgent.OutputTTS, final=True)
         elif result == 2:
@@ -294,6 +295,14 @@ class BiBotAgent(Plugin):
             self.output( "The end", channel=BiBotAgent.OutputTTS, final=True)
         elif text != "":
             self.output( text, channel=BiBotAgent.OutputLLM, final=True, **kwargs)   # partial=True
+
+    #-------------------------------------------------------------------------------------
+    async def send_ws_commands(command:str):
+        uri = "ws://localhost:52560"
+
+        async with websockets.connect(uri) as websocket:
+            await websocket.send(command)
+            print(f"Sent: {command}")
 
 
 #=========================================================================================================================================
