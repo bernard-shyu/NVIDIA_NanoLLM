@@ -61,7 +61,7 @@ class BiBotChatLLM(Agent):
             self.asr.add(PrintStream(partial=False, prefix='👻>> ', color='magenta'), AutoASR.OutputPartial)
             
             self.asr.add(self.asr_partial, AutoASR.OutputPartial)   # pause output when user is speaking
-            self.asr.add(self.asr_final,   AutoASR.OutputFinal)     # clear queues on final ASR transcript
+            #self.asr.add(self.asr_final,   AutoASR.OutputFinal)     # clear queues on final ASR transcript
 
             self.asr_history = None  # store the partial ASR transcript
 
@@ -99,20 +99,19 @@ class BiBotChatLLM(Agent):
 
         # Build up Plugin connections
         #-----------------------------------------------------------------
-        if self.asr:
-            self.asr.add(self.bibot, AutoASR.OutputFinal)       # Text prompts from ASR Audio.
-        self.prompt.add( self.bibot)                            # Text prompts from UserPrompt CLI.
-
-        self.bibot.add(self.llm, BiBotAgent.OutputLLM)          # send the LLM query to the LLM
         self.bibot.add(PrintStream(partial=False, prefix='🤖🤖 ', color='red'),      BiBotAgent.OutputTTS)
         self.bibot.add(PrintStream(partial=False, prefix='🤖>> ', color='magenta'),  BiBotAgent.OutputLLM)
-
-        if self.tts:
-            self.bibot.add(self.tts, BiBotAgent.OutputTTS)      # send the audio output to the TTS
-            self.llm.add(  self.tts, ChatQuery.OutputFinal)     # send the LLM query to the TTS
-
         self.llm.add(  PrintStream(partial=False, prefix='👹👹 ', color='green'),    ChatQuery.OutputFinal)
         self.llm.add(  PrintStream(partial=False, prefix='👹>> ', color='magenta'),  ChatQuery.OutputWords)
+
+        if self.asr:
+            self.asr.add(  self.bibot, AutoASR.OutputFinal)     # Text prompts from ASR Audio.
+        self.prompt.add(   self.bibot)                          # Text prompts from UserPrompt CLI.
+
+        self.bibot.add(    self.llm,   BiBotAgent.OutputLLM)    # send the LLM query to the LLM
+        if self.tts:
+            self.bibot.add(self.tts,   BiBotAgent.OutputTTS)    # send the audio output to the TTS
+            self.llm.add(  self.tts,   ChatQuery.OutputFinal)   # send the LLM query to the TTS
 
         #-------------------------------------------------------------------------------------
         # setup pipeline with two entry nodes
@@ -153,20 +152,24 @@ class BiBotChatLLM(Agent):
             self.tts_ratelimit.interrupt(block=False, recursive=False) # might be paused/asleep
  
     def on_tts_begin(self, input):
-        logging.info(f"TTS_synthesizing: SPEAKER started")
-        self.TTS_synthesizing = True
         self.last_monitor_time = time.perf_counter()
-        threading.Thread(target=self.tts_synth_monitor).start()
+        if not self.TTS_synthesizing:
+            logging.info(f"TTS_synthesizing: SPEAKER started")
+            self.TTS_synthesizing = True
+            threading.Thread(target=self.tts_synth_monitor).start()
 
     def on_tts_progress(self, input):
+        self.audio_output_device.unpause()
         self.last_monitor_time = time.perf_counter()
 
     def tts_synth_monitor(self):
         #logging.debug(f"TTS_synthesizing:  Monitoring started")
         while self.TTS_synthesizing:
-            if (time.perf_counter() - self.last_monitor_time) >= 2:    # Check if 2 seconds have passed in silence
-                self.vad.interrupt(recursive=False)                    # clear VAD/ASR for feedbacked voice from TTS output
-                self.asr.interrupt(recursive=False)
+            if (time.perf_counter() - self.last_monitor_time) >= 5:    # Check if 5 seconds have passed in silence
+                self.asr.interrupt(recursive=False)                    # clear ASR for captured TTS-feedbacked voice
+                self.bibot.interrupt(recursive=False)
+                self.bibot.tts_stopped()
+                self.audio_output_device.pause()
                 self.TTS_synthesizing = False
                 self.print_input_prompt()
                 logging.info(f"TTS_synthesizing: SPEAKER stopped")
@@ -180,7 +183,7 @@ class BiBotChatLLM(Agent):
                    f"RLMT={self.tts_ratelimit.input_queue.qsize()} " + \
                    f"USER={self.prompt.input_queue.qsize()} " + \
                    f"BIBOT={self.bibot.input_queue.qsize()} "
-        dbg_txt += f"TTS-SYN={self.TTS_synthesizing} "
+        dbg_txt += f"  FSM={self.bibot.fsm_state}  TTS-SYN={self.TTS_synthesizing} "
         termcolor.cprint(f"👾👾 Pulgins input_queue size: {dbg_txt}\n", 'red', end='', flush=True)
 
     def print_input_prompt(self):
@@ -208,7 +211,8 @@ class BiBotAgent(Plugin):
         "VERBS": ["去抓", "去拿", "我想", "我要", "幫我拿", "幫我抓" ],
         "OBJECTS": ["巧克力口味", "草莓口味", "牛奶口味" ],
         "COLORS": ["紅色",       "粉紅色",  "淺黃色" ],
-        "STOP": ["停止", "停停停", "停下來" ],
+        "STOP": ["不要[說吵]", "停止", "停停停", "停下來" ],
+        "EMPTY": ["[。\., ]*" ],
         "SECRETS": ["微妙不可思議", "維妙不可思議", "惟妙不可思議", "慈悲喜捨", "信解受持" ]
     }
     
@@ -244,6 +248,7 @@ class BiBotAgent(Plugin):
         matched_color = matches["COLORS"]
         matched_secret = matches["SECRETS"]
         matched_stop = matches["STOP"]
+        matched_empty = matches["EMPTY"]
         
         # Find index of matched color in the color list
         # index_color = None
@@ -260,6 +265,7 @@ class BiBotAgent(Plugin):
         elif matched_verb:                      return 3, "NEED_USER_CONFIRM"
         elif matched_secret:                    return 4, "SECRETS"
         elif matched_stop:                      return 0, "STOP"
+        elif matched_empty:                     return -2, ""
         else:                                   return -1, text
         
     #-------------------------------------------------------------------------------------
@@ -292,6 +298,18 @@ class BiBotAgent(Plugin):
         2) LLM for general text queries and get the reply.
         """
         super().__init__(output_channels=2, **kwargs)
+        self.fsm_state = "FSM_IDLE"  # FSM state
+
+    #-------------------------------------------------------------------------------------
+    def stop_tts(self, fsm_state="FSM_TTS_STOPPING"):
+        """
+        Cancel the TTS synthesizing
+        """
+        agent.on_interrupt()
+        self.fsm_state = fsm_state
+
+    def tts_stopped(self):
+        self.fsm_state = "FSM_IDLE"
 
     #-------------------------------------------------------------------------------------
     def process(self, input, channel=None,  **kwargs):
@@ -307,38 +325,78 @@ class BiBotAgent(Plugin):
             return
         
         #---------------------------------------------------------------------------------
+        # Console commands: straight to execute without FSM
         if input == "/status":
             agent.print_pipeline_status(input)    # print the status of the pipeline
             return
         elif input == "/cancel" or input == "/stop":
             logging.info(f"BiBotAgent will cancel TTS synthesizing: {input}")
-            agent.on_interrupt()
+            self.stop_tts()
             return
 
         #---------------------------------------------------------------------------------
-        result, text = BiBotAgent.match_bibot_patterns(input)
-        logging.debug(f"BiBotAgent match ROBOT pattern: (input='{input}', result={result}, text='{text}'\n\tkwargs='{kwargs}'")
+        result, text = BiBotAgent.match_bibot_patterns(input.strip())
+        logging.debug(f"BiBotAgent FSM State: {self.fsm_state}, USER INPUT: '{input}', MATCHED result={result}, text='{text}'\n\tkwargs='{kwargs}'")
 
         #---------------------------------------------------------------------------------
-        if result == 0:                 # stop the TTS synthesizing
-            logging.info(f"BiBotAgent will stop TTS synthesizing: {text}")
-            agent.on_interrupt()
-            return
-
+        # FSM_IDLE: the system should have CLEAN state by reset CHAT history
+        # FSM_TTS_ROBOT: Action taken for ROBOT control with TTS output. TTS can't be stopped in this state
+        # FSM_TTS_SPEAK: TTS ouput text from LLM & etc, can be stopped by new ROBOT Voice command or STOP command
+        # FSM_TTS_STOPPING: special state indicating TTS is on stopping
         #---------------------------------------------------------------------------------
-        if result == 1 or result == 2:
+        if self.fsm_state == "FSM_IDLE":
+            agent.llm.history.reset()         # Reset the chat history
+
+        if result == 0:
+            #-----------------------------------------------------------------------------
+            # STOP command: to cancel the TTS synthesizing
+            #-----------------------------------------------------------------------------
+            if self.fsm_state == "FSM_TTS_ROBOT":
+                logging.debug(f"BiBotAgent can NOT stop ROBOT action: {self.last_text}")
+            else:
+                logging.info(f"BiBotAgent will stop TTS synthesizing: {text}")
+                self.stop_tts()
+                return
+
+        elif result == 1 or result == 2:
+            #-----------------------------------------------------------------------------
+            # ACTION command: to send to external WS Server
+            #-----------------------------------------------------------------------------
+            if self.fsm_state == "FSM_TTS_SPEAK":
+                agent.on_interrupt()
+            
             self.output( f"榮幸之至, 且待片刻, 將為汝取: {text}", channel=BiBotAgent.OutputTTS, final=True)
             asyncio.run(BiBotAgent.send_ws_commands(text))
             logging.info(f"Will invoke external ROBOT to pick object: '{text}'")
+            self.last_text = text
+            self.fsm_state = "FSM_TTS_ROBOT"
+
         elif result == 3:
-            self.output( "汝欲求何事,  我將為汝效勞?", channel=BiBotAgent.OutputTTS, final=True)
+            #-----------------------------------------------------------------------------
+            # USER_CONFIRM command: to confirm with the user 
+            #-----------------------------------------------------------------------------
+            if self.fsm_state != "FSM_TTS_SPEAK":
+                self.output( "汝欲求何事,  我將為汝效勞?", channel=BiBotAgent.OutputTTS, final=True)
+                self.fsm_state = "FSM_TTS_SPEAK"
+
         elif result == 4:
-            for line in zh_prompts_list:
-                self.output( line, channel=BiBotAgent.OutputTTS, partial=True)
-                logging.debug(f"secret workds: '{line}'")
-            self.output( "The end", channel=BiBotAgent.OutputTTS, final=True)
+            #-----------------------------------------------------------------------------
+            # SECRET command: TTS normal speaking
+            #-----------------------------------------------------------------------------
+            if self.fsm_state != "FSM_TTS_SPEAK":
+                for line in zh_prompts_list:
+                    self.output( line, channel=BiBotAgent.OutputTTS, partial=True)
+                    logging.debug(f"secret workds: '{line}'")
+                self.output( "The end", channel=BiBotAgent.OutputTTS, final=True)
+                self.fsm_state = "FSM_TTS_SPEAK"
+
         elif text != "":
-            self.output( text, channel=BiBotAgent.OutputLLM, final=True, **kwargs)   # partial=True
+            #-----------------------------------------------------------------------------
+            # LLM queries: TTS normal speaking
+            #-----------------------------------------------------------------------------
+            if self.fsm_state != "FSM_TTS_SPEAK":
+                self.output( text, channel=BiBotAgent.OutputLLM, final=True, **kwargs)   # partial=True
+                self.fsm_state = "FSM_TTS_SPEAK"
 
     #-------------------------------------------------------------------------------------
     async def send_ws_commands(command:str):
