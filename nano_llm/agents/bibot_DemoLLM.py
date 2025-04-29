@@ -28,28 +28,33 @@ class BiBotChatLLM(Agent):
     """
     Agent for ASR → LLM → TTS pipeline.
     """
-    def __init__(self, language_code : str = 'en-US',  sample_rate_hz : int = 44100,
-                 asr : str = 'riva',  audio_input_device :  int = 1,
-                 tts : str = 'piper', audio_output_device : int = 1,
-                 **kwargs):
+    def __init__(self, **kwargs):
         """
         Args:
           asr (NanoLLM.plugins.AutoASR|str): the ASR plugin instance or model name to connect with the LLM.
           tts (NanoLLM.plugins.AutoTTS|str): the TTS plugin instance (or model name)- if None, will be loaded from kwargs.
         """
-        kwargs.update(language_code=language_code, 
-                      sample_rate_hz=sample_rate_hz, audio_input_device=audio_input_device, audio_output_device=audio_output_device,
-                      system_prompt="你是一个中文人工智能助手, 请用中文回答所有问题." if language_code == 'zh-CN' else  "You are a helpful AI assistant.")
+        kwargs.update(
+            language_code       = (language_code        := 'en-US'   if not (val := kwargs.get('language_code'))       else val),
+            sample_rate_hz      = (sample_rate_hz       := 44100     if not (val := kwargs.get('sample_rate_hz'))      else val),
+            audio_input_device  = (audio_input_device   := 1         if not (val := kwargs.get('audio_input_device'))  else val),
+            audio_output_device = (audio_output_device  := 1         if not (val := kwargs.get('audio_output_device')) else val),
+            api                 = (api                  := 'mlc'     if not (val := kwargs.get('api'))                 else val),
+            asr                 = (asr                  := 'riva'    if not (val := kwargs.get('asr'))                 else val),
+            tts                 = (tts                  := 'piper'   if not (val := kwargs.get('tts'))                 else val),
+            system_prompt       = (system_prompt := "你是一个中文人工智能助手, 请用中文回答所有问题." if language_code == 'zh-CN' else "You are a helpful AI assistant.")
+        )
         super().__init__(**kwargs)
 
-        logging.debug(f"BXU-DEBUG: audio_input_device={audio_input_device}, audio_output_device={audio_output_device}, asr={asr}\nkwargs='{kwargs}'")
+        logging.debug(f"BXU-DEBUG: audio_input_device={audio_input_device}, audio_output_device={audio_output_device}, sample_rate_hz={sample_rate_hz}, asr={asr}, tts={tts} \n\nkwargs='{kwargs}'")
+
         #-------------------------------------------------------------------------------------
         #: The ASR plugin that listen to the microphone AudioInput
         #-------------------------------------------------------------------------------------
         if not asr or isinstance(asr, str):
             # Create Plugin objects for ASR and VAD
             #-------------------------------------------------------------
-            self.asr = AutoASR.from_pretrained(asr=asr, **kwargs) 
+            self.asr = AutoASR.from_pretrained(**kwargs) 
             self.vad = VADFilter(**kwargs)
             self.audio_input = AudioInputDevice(**kwargs)
 
@@ -71,7 +76,7 @@ class BiBotChatLLM(Agent):
         if not tts or isinstance(tts, str):
             # Create Plugin objects for TTS and RateLimit
             #-------------------------------------------------------------
-            self.tts = AutoTTS.from_pretrained(tts=tts, **kwargs) 
+            self.tts = AutoTTS.from_pretrained(**kwargs) 
             self.tts_ratelimit = RateLimit(rate=1.0, drop_inputs=True, chunk=int(kwargs.get('sample_rate_hz')/10)) # slow down TTS to realtime and be able to pause it
             self.tts.add(self.tts_ratelimit)
 
