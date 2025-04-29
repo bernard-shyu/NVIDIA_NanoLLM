@@ -48,13 +48,13 @@ class RateLimit(Plugin):
         """
         while True:
             if self.interrupted:
-                #logging.debug(f"RateLimit interrupted (input={len(input)})")
+                logging.debug(f"RateLimit interrupted (input={len(input)})")
                 return
             
             pause_duration = self.pause_duration()
             
             if pause_duration > 0:
-                #logging.debug(f"RateLimit pausing for {pause_duration} seconds (input={len(input)})")
+                logging.debug(f"RateLimit pausing for {pause_duration} seconds (input={len(input)})")
                 time.sleep(pause_duration)
                 continue
             
@@ -90,7 +90,7 @@ class RateLimit(Plugin):
         """
         curr_time = time.perf_counter()
         elapsed_time = curr_time - self.last_time
-        self.tx_rate = (self.tx_rate * 0.5) + ((1.0 / elapsed_time) * 0.5)
+        self.tx_rate = (self.tx_rate * 0.5) + ((1.0 / elapsed_time) * 0.5)      # BXU: exponential moving average
         self.last_time = curr_time
         self.send_stats(
             summary=[f"{self.tx_rate:.1f} tx/sec"],

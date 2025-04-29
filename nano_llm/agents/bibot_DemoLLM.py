@@ -306,9 +306,11 @@ class BiBotAgent(Plugin):
         Cancel the TTS synthesizing
         """
         agent.on_interrupt()
+        agent.llm.history.reset()         # Reset the chat history
         self.fsm_state = fsm_state
 
     def tts_stopped(self):
+        agent.llm.history.reset()         # Reset the chat history
         self.fsm_state = "FSM_IDLE"
 
     #-------------------------------------------------------------------------------------
@@ -344,9 +346,6 @@ class BiBotAgent(Plugin):
         # FSM_TTS_SPEAK: TTS ouput text from LLM & etc, can be stopped by new ROBOT Voice command or STOP command
         # FSM_TTS_STOPPING: special state indicating TTS is on stopping
         #---------------------------------------------------------------------------------
-        if self.fsm_state == "FSM_IDLE":
-            agent.llm.history.reset()         # Reset the chat history
-
         if result == 0:
             #-----------------------------------------------------------------------------
             # STOP command: to cancel the TTS synthesizing
@@ -362,41 +361,43 @@ class BiBotAgent(Plugin):
             #-----------------------------------------------------------------------------
             # ACTION command: to send to external WS Server
             #-----------------------------------------------------------------------------
-            if self.fsm_state == "FSM_TTS_SPEAK":
-                agent.on_interrupt()
+            if self.fsm_state == "FSM_TTS_ROBOT":   # doesn't allow re-entry
+                return
+            elif self.fsm_state == "FSM_TTS_SPEAK":
+                self.stop_tts()
             
+            self.fsm_state = "FSM_TTS_ROBOT"
             self.output( f"榮幸之至, 且待片刻, 將為汝取: {text}", channel=BiBotAgent.OutputTTS, final=True)
             asyncio.run(BiBotAgent.send_ws_commands(text))
             logging.info(f"Will invoke external ROBOT to pick object: '{text}'")
             self.last_text = text
-            self.fsm_state = "FSM_TTS_ROBOT"
 
         elif result == 3:
             #-----------------------------------------------------------------------------
             # USER_CONFIRM command: to confirm with the user 
             #-----------------------------------------------------------------------------
             if self.fsm_state != "FSM_TTS_SPEAK":
-                self.output( "汝欲求何事,  我將為汝效勞?", channel=BiBotAgent.OutputTTS, final=True)
                 self.fsm_state = "FSM_TTS_SPEAK"
+                self.output( "汝欲求何事,  我將為汝效勞?", channel=BiBotAgent.OutputTTS, final=True)
 
         elif result == 4:
             #-----------------------------------------------------------------------------
             # SECRET command: TTS normal speaking
             #-----------------------------------------------------------------------------
             if self.fsm_state != "FSM_TTS_SPEAK":
+                self.fsm_state = "FSM_TTS_SPEAK"
                 for line in zh_prompts_list:
                     self.output( line, channel=BiBotAgent.OutputTTS, partial=True)
                     logging.debug(f"secret workds: '{line}'")
                 self.output( "The end", channel=BiBotAgent.OutputTTS, final=True)
-                self.fsm_state = "FSM_TTS_SPEAK"
 
         elif text != "":
             #-----------------------------------------------------------------------------
             # LLM queries: TTS normal speaking
             #-----------------------------------------------------------------------------
             if self.fsm_state != "FSM_TTS_SPEAK":
-                self.output( text, channel=BiBotAgent.OutputLLM, final=True, **kwargs)   # partial=True
                 self.fsm_state = "FSM_TTS_SPEAK"
+                self.output( text, channel=BiBotAgent.OutputLLM, final=True, **kwargs)   # partial=True
 
     #-------------------------------------------------------------------------------------
     async def send_ws_commands(command:str):

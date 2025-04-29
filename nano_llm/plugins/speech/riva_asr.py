@@ -172,7 +172,7 @@ class AudioQueue:
             try:
                 samples, kwargs = self.asr.input_queue.get(timeout=self.asr.keep_alive_timeout) 
             except queue.Empty:
-                logging.debug(f"sending ASR keep-alive silence (idle for {self.asr.keep_alive_timeout} seconds)")
+                #logging.debug(f"sending ASR keep-alive silence (idle for {self.asr.keep_alive_timeout} seconds)")
                 return bytes(chunk_size)
 
             if samples is None:
